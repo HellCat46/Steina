@@ -41,7 +41,7 @@ func main() {
 
 		for iidx, project := range projects {
 			files, err := getProjectFiles(project.id)
-			if(err != nil){
+			if err != nil {
 				fmt.Printf("Error Occured while fetching Project %s's Files\n", project.name)
 				fmt.Println(err)
 				continue
@@ -55,7 +55,7 @@ func main() {
 
 	dataToString(teams)
 
-	createBackup(teams, 5)
+	fmt.Println(createBackup(teams))
 }
 
 // https://design.penpot.app/api/rpc/command/export-binfile
@@ -268,7 +268,7 @@ func getProjectFiles(projectId string) ([]ProjectFile, error) {
 	}
 
 	bytes, err := io.ReadAll(res.Body)
-	if(err != nil){
+	if err != nil {
 		return files, err
 	}
 
@@ -321,7 +321,7 @@ func parseFileList(data string) []ProjectFile {
 					} else {
 						timeStamp2 = timeStamp
 					}
-				} else if !(strings.Contains(parsedStr, "~") || strings.Contains(parsedStr, "^") || strings.Contains(parsedStr, "https://") ){
+				} else if !(strings.Contains(parsedStr, "~") || strings.Contains(parsedStr, "^") || strings.Contains(parsedStr, "https://")) {
 					name = parsedStr
 				}
 
@@ -352,25 +352,52 @@ func parseFileList(data string) []ProjectFile {
 
 }
 
-
-func createBackup(teams []Team, backupCount int) error {
+func createBackup(teams []Team) error {
 	backupsInfo, err := os.Stat("backups")
-	if(os.IsNotExist(err)){
-		err := os.Mkdir("backups", os.ModeDir)
-		if(err != nil){
+	if os.IsNotExist(err) {
+		err := os.Mkdir("backups", 0755)
+		if err != nil {
 			return err
 		}
 		backupsInfo, err = os.Stat("backups")
-		if(err != nil){
-			return fmt.Errorf("Failed to get backup folder info")
+		if err != nil {
+			return fmt.Errorf("failed to get backup folder info")
 		}
-	}else {
+	} else if (err != nil) {
 		return err
 	}
 
-	if(!backupsInfo.IsDir()){
-		return fmt.Errorf("Another entry already exists with \"backups\" name")
+	if !backupsInfo.IsDir() {
+		return fmt.Errorf("another entry already exists with \"backups\" name")
 	}
+
+	backupFolder := fmt.Sprintf("backups/backup-%s", strings.Join(strings.Split(time.Now().Local().String(), " ")[0:2], "-"))
+	if os.MkdirAll(backupFolder, 0755) != nil {
+		return fmt.Errorf("unable to create a backup at %s", time.Now().Local().String())
+	}
+
+	for _, team := range teams {
+		if os.MkdirAll(fmt.Sprintf("%s/%s", backupFolder, team.name), 0755) != nil {
+			fmt.Printf("unable to create a folder for team %s at %s\n", team.name, time.Now().Local().String())
+			continue
+		}
+
+		for _, project := range team.projects {
+			if os.MkdirAll(fmt.Sprintf("%s/%s/%s", backupFolder, team.name, project.name), 0755) != nil {
+				fmt.Printf("unable to create a folder for team %s's %s project at %s\n", team.name, project.name, time.Now().Local().String())
+				continue
+			}
+
+			for _, projectFile := range project.files {
+				if os.MkdirAll(fmt.Sprintf("%s/%s/%s/%s", backupFolder, team.name, project.name, projectFile.name), 0755) != nil {
+					fmt.Printf("unable to create a folder for team %s's %s project at %s\n", team.name, project.name, time.Now().Local().String())
+					continue
+				}	
+			}
+
+		}
+	}
+
 	return nil
 }
 
@@ -402,7 +429,7 @@ func dataToString(teams []Team) {
 					jsonData = strings.TrimSuffix(jsonData, ",")
 					jsonData += "}"
 				}
-				jsonData += "},"	
+				jsonData += "},"
 			}
 			jsonData = strings.TrimSuffix(jsonData, ",")
 			jsonData += "},"

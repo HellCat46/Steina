@@ -2,17 +2,18 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strconv"
+	
 	"strings"
 	"time"
 )
 
 var headers = http.Header{
-	"Content-Type": {"application/json"},
+	"Content-Type": {"application/json+transit"},
 }
 
 var client = &http.Client{}
@@ -58,17 +59,43 @@ func main() {
 	fmt.Println(createBackup(teams))
 }
 
-// https://design.penpot.app/api/rpc/command/export-binfile
+
 // {"~:file-id":"~u<File_ID>","~:include-libraries":true,"~:embed-assets":false}
-func downloadFile() {
+func downloadPenpotFile(fileId string) ([]byte, error) {
+	var data []byte
 
+	reqBody, err := json.Marshal(map[string]interface {}{
+		"~:embed-assets": false,
+		"~:file-id": "~u"+fileId,
+		"~:include-libraries": true,
+	})
+	if(err != nil){
+		return data, err
+	}
+
+	req, err := http.NewRequest("POST", "https://design.penpot.app/api/rpc/command/export-binfile", bytes.NewBuffer(reqBody))
+	if(err != nil){
+		return data, err
+	}
+
+	req.Header = headers
+	res, err := client.Do(req)
+	if(err != nil){
+		return data, err
+	}
+
+	bytes, err := io.ReadAll(res.Body)
+	if(err != nil){
+		return data, err
+	}
+
+	if(res.StatusCode != 200){
+		return data, fmt.Errorf("%d: %s", res.StatusCode, string(bytes))
+	}
+
+	return bytes, nil
 }
 
-type Team struct {
-	id       string
-	name     string
-	projects []Project
-}
 
 func getTeams() ([]Team, error) {
 	var teams []Team
@@ -99,58 +126,6 @@ func getTeams() ([]Team, error) {
 	return teams, nil
 }
 
-func parseTeamList(data string) []Team {
-	var teams []Team
-
-	var id, name, parsedStr string
-	isStringOpen := false
-	bracketCount := 0
-	for idx := 1; idx < len(data)-1; idx++ {
-
-		// Looks for inner Arrays
-		if data[idx] == '[' {
-			bracketCount++
-		} else if data[idx] == ']' {
-			bracketCount--
-			if bracketCount != 1 {
-				continue
-			}
-		}
-
-		if data[idx] == '"' {
-			if isStringOpen {
-				if strings.Contains(parsedStr, "~u") {
-					id = strings.Replace(parsedStr, "~u", "", 1)
-				} else if !strings.Contains(parsedStr, "~") && !strings.Contains(parsedStr, "^") {
-					name = parsedStr
-				}
-
-				if len(id) > 0 && len(name) > 0 {
-					teams = append(teams, Team{id, name, []Project{}})
-					id = ""
-					name = ""
-				}
-			}
-			parsedStr = ""
-			isStringOpen = !isStringOpen
-			continue
-		}
-
-		if isStringOpen {
-			parsedStr += string(data[idx])
-		}
-	}
-
-	return teams
-}
-
-type Project struct {
-	id           string
-	name         string
-	lastModified time.Time
-	files        []ProjectFile
-}
-
 func getProjects(projectId string) ([]Project, error) {
 	var projects []Project
 	req, err := http.NewRequest("GET", fmt.Sprintf("https://design.penpot.app/api/rpc/command/get-projects?team-id=%s", projectId), bytes.NewBuffer([]byte("")))
@@ -178,79 +153,6 @@ func getProjects(projectId string) ([]Project, error) {
 	projects = parseProjectList(data)
 
 	return projects, nil
-}
-
-func parseProjectList(data string) []Project {
-	var projects []Project
-
-	var id, name, parsedStr string
-	isStringOpen := false
-	var bracketCount int
-	var timeStamp1, timeStamp2 int64
-
-	for idx := 1; idx < len(data)-1; idx++ {
-
-		// Looks for inner Arrays
-		if data[idx] == '[' {
-			bracketCount++
-		} else if data[idx] == ']' {
-			bracketCount--
-			if bracketCount <= 1 {
-				continue
-			}
-		}
-
-		if data[idx] == '"' {
-			if isStringOpen {
-
-				if strings.Contains(parsedStr, "~u") && len(id) == 0 {
-					id = strings.Replace(parsedStr, "~u", "", 1)
-				} else if strings.Contains(parsedStr, "~m") {
-					timeStamp, err := strconv.ParseInt(strings.Replace(parsedStr, "~m", "", 1), 10, 64)
-					if err != nil {
-						parsedStr = ""
-						continue
-					}
-
-					if timeStamp1 == 0 {
-						timeStamp1 = timeStamp
-					} else {
-						timeStamp2 = timeStamp
-					}
-				} else if !strings.Contains(parsedStr, "~") && !strings.Contains(parsedStr, "^") {
-					name = parsedStr
-				}
-
-				// fmt.Println(id, name, timeStamp1, timeStamp2)
-				if len(id) > 0 && len(name) > 0 && timeStamp1 != 0 && timeStamp2 != 0 {
-					if timeStamp1 < timeStamp2 {
-						timeStamp1 = timeStamp2
-					}
-					projects = append(projects, Project{id, name, time.UnixMilli(timeStamp1), []ProjectFile{}})
-
-					id = ""
-					name = ""
-					timeStamp1 = 0
-					timeStamp2 = 0
-				}
-			}
-			parsedStr = ""
-			isStringOpen = !isStringOpen
-			continue
-		}
-
-		if isStringOpen {
-			parsedStr += string(data[idx])
-		}
-	}
-
-	return projects
-}
-
-type ProjectFile struct {
-	id           string
-	name         string
-	lastModified time.Time
 }
 
 func getProjectFiles(projectId string) ([]ProjectFile, error) {
@@ -283,74 +185,6 @@ func getProjectFiles(projectId string) ([]ProjectFile, error) {
 	return files, nil
 }
 
-func parseFileList(data string) []ProjectFile {
-
-	var files []ProjectFile
-
-	var id, name, parsedStr string
-	isStringOpen := false
-	var bracketCount int
-	var timeStamp1, timeStamp2 int64
-
-	for idx := 1; idx < len(data)-1; idx++ {
-
-		// Looks for inner Arrays
-		if data[idx] == '[' {
-			bracketCount++
-		} else if data[idx] == ']' {
-			bracketCount--
-			if bracketCount <= 1 {
-				continue
-			}
-		}
-
-		if data[idx] == '"' {
-			if isStringOpen {
-
-				if strings.Contains(parsedStr, "~u") && len(id) == 0 {
-					id = strings.Replace(parsedStr, "~u", "", 1)
-				} else if strings.Contains(parsedStr, "~m") {
-					timeStamp, err := strconv.ParseInt(strings.Replace(parsedStr, "~m", "", 1), 10, 64)
-					if err != nil {
-						parsedStr = ""
-						continue
-					}
-
-					if timeStamp1 == 0 {
-						timeStamp1 = timeStamp
-					} else {
-						timeStamp2 = timeStamp
-					}
-				} else if !(strings.Contains(parsedStr, "~") || strings.Contains(parsedStr, "^") || strings.Contains(parsedStr, "https://")) {
-					name = parsedStr
-				}
-
-				// fmt.Println(id, name, timeStamp1, timeStamp2)
-				if len(id) > 0 && len(name) > 0 && timeStamp1 != 0 && timeStamp2 != 0 {
-					if timeStamp1 < timeStamp2 {
-						timeStamp1 = timeStamp2
-					}
-					files = append(files, ProjectFile{id, name, time.UnixMilli(timeStamp1)})
-
-					id = ""
-					name = ""
-					timeStamp1 = 0
-					timeStamp2 = 0
-				}
-			}
-			parsedStr = ""
-			isStringOpen = !isStringOpen
-			continue
-		}
-
-		if isStringOpen {
-			parsedStr += string(data[idx])
-		}
-	}
-
-	return files
-
-}
 
 func createBackup(teams []Team) error {
 	backupsInfo, err := os.Stat("backups")
@@ -389,15 +223,28 @@ func createBackup(teams []Team) error {
 			}
 
 			for _, projectFile := range project.files {
-				if os.MkdirAll(fmt.Sprintf("%s/%s/%s/%s", backupFolder, team.name, project.name, projectFile.name), 0755) != nil {
-					fmt.Printf("unable to create a folder for team %s's %s project at %s\n", team.name, project.name, time.Now().Local().String())
+				filePath := fmt.Sprintf("%s/%s/%s/%s", backupFolder, team.name, project.name, projectFile.name)
+				if os.MkdirAll(filePath, 0755) != nil {
+					fmt.Printf("unable to create a folder for team %s's %s file in %s project at %s\n", team.name, projectFile.name, project.name, time.Now().Local().String())
 					continue
 				}	
+
+				penpotFile, err := os.Create(fmt.Sprintf("%s/%s.penpot",filePath, projectFile.name))
+				if(err != nil){
+					fmt.Printf("unable to create penpot file for team\n%s\n", err)
+				}else {
+					bytes, err := downloadPenpotFile(projectFile.id)
+					if(err != nil){
+						fmt.Printf("unable to download penpot file \n%s \n", err)
+					}else {
+						penpotFile.Write(bytes)
+						penpotFile.Close()
+					}
+				}
 			}
 
 		}
 	}
-
 	return nil
 }
 

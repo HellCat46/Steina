@@ -12,9 +12,7 @@ import (
 	"time"
 )
 
-var headers = http.Header{
-	"Content-Type": {"application/json+transit"},
-}
+var headers = http.Header{}
 
 var client = &http.Client{}
 
@@ -78,6 +76,7 @@ func downloadPenpotFile(fileId string) ([]byte, error) {
 		return data, err
 	}
 
+	headers.Add("Content-Type", "application/transit+json")
 	req.Header = headers
 	res, err := client.Do(req)
 	if(err != nil){
@@ -229,7 +228,7 @@ func createBackup(teams []Team) error {
 					continue
 				}	
 
-				penpotFile, err := os.Create(fmt.Sprintf("%s/%s.penpot",filePath, projectFile.name))
+				penpotFile, err := os.Create(fmt.Sprintf("%s/%s.penpot",filePath, strings.ReplaceAll(projectFile.name, " ", "_")))
 				if(err != nil){
 					fmt.Printf("unable to create penpot file for team\n%s\n", err)
 				}else {

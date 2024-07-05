@@ -3,7 +3,6 @@ A tool to take regular backups of all the files on my Penpot account because I h
 
 ## Build
 ```
-export PENPOT_TOKEN=<ACCESS-TOKEN>
 go build
-./steina
+PENPOT_TOKEN=<TOKEN> BACKUP_PATH=<PATH> ./steina
 ```

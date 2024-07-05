@@ -7,19 +7,22 @@ import (
 	"io"
 	"net/http"
 	"os"
-	
+
 	"strings"
 	"time"
 )
 
-var headers = http.Header{}
-
 var client = &http.Client{}
+var headers = http.Header{}
+var basePath = "backups"
 
 func main() {
+	if len(os.Getenv("BACKUP_PATH")) != 0 {
+		basePath = os.Getenv("BACKUP_PATH")
+	}
 	// Gettings the Penpot Access Token
 	if len(os.Getenv("PENPOT_TOKEN")) == 0 {
-		fmt.Println("ENV not set.")
+		fmt.Println("PENPOT_TOKEN ENV not set.")
 		return
 	}
 	headers.Add("Authorization", "Token "+os.Getenv("PENPOT_TOKEN"))
@@ -52,49 +55,52 @@ func main() {
 		teams[idx].projects = projects
 	}
 
-	dataToString(teams)
+	//dataToString(teams)
 
-	fmt.Println(createBackup(teams))
+	err = createBackup(teams)
+	if(err == nil){
+		fmt.Printf("\nSuccessfully Created a Backup at %s\n", time.Now().Local().String())
+		return
+	}
+
+	fmt.Println(err)
 }
 
-
-// {"~:file-id":"~u<File_ID>","~:include-libraries":true,"~:embed-assets":false}
 func downloadPenpotFile(fileId string) ([]byte, error) {
 	var data []byte
 
-	reqBody, err := json.Marshal(map[string]interface {}{
-		"~:embed-assets": false,
-		"~:file-id": "~u"+fileId,
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"~:embed-assets":      false,
+		"~:file-id":           "~u" + fileId,
 		"~:include-libraries": true,
 	})
-	if(err != nil){
+	if err != nil {
 		return data, err
 	}
 
 	req, err := http.NewRequest("POST", "https://design.penpot.app/api/rpc/command/export-binfile", bytes.NewBuffer(reqBody))
-	if(err != nil){
+	if err != nil {
 		return data, err
 	}
 
 	headers.Add("Content-Type", "application/transit+json")
 	req.Header = headers
 	res, err := client.Do(req)
-	if(err != nil){
+	if err != nil {
 		return data, err
 	}
 
 	bytes, err := io.ReadAll(res.Body)
-	if(err != nil){
+	if err != nil {
 		return data, err
 	}
 
-	if(res.StatusCode != 200){
+	if res.StatusCode != 200 {
 		return data, fmt.Errorf("%d: %s", res.StatusCode, string(bytes))
 	}
 
 	return bytes, nil
 }
-
 
 func getTeams() ([]Team, error) {
 	var teams []Team
@@ -184,27 +190,35 @@ func getProjectFiles(projectId string) ([]ProjectFile, error) {
 	return files, nil
 }
 
-
 func createBackup(teams []Team) error {
-	backupsInfo, err := os.Stat("backups")
-	if os.IsNotExist(err) {
-		err := os.Mkdir("backups", 0755)
-		if err != nil {
+	basePathInfo, err := os.Stat(basePath)
+	if basePath == "backups" {
+
+		if os.IsNotExist(err) {
+			err := os.Mkdir("backups", 0755)
+			if err != nil {
+				return err
+			}
+			basePathInfo, err = os.Stat("backups")
+			if err != nil {
+				return fmt.Errorf("failed to get backup folder info")
+			}
+		} else if err != nil {
 			return err
 		}
-		backupsInfo, err = os.Stat("backups")
-		if err != nil {
-			return fmt.Errorf("failed to get backup folder info")
+
+		if !basePathInfo.IsDir() {
+			return fmt.Errorf("\"backups\" already exists but is not a directory/folder")
 		}
-	} else if (err != nil) {
-		return err
+	} else {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("path %s doesn't exist", basePath)
+		} else if !basePathInfo.IsDir() {
+			return fmt.Errorf("path %s already exists but is not a directory/folder", basePath)
+		}
 	}
 
-	if !backupsInfo.IsDir() {
-		return fmt.Errorf("another entry already exists with \"backups\" name")
-	}
-
-	backupFolder := fmt.Sprintf("backups/backup-%s", strings.Join(strings.Split(time.Now().Local().String(), " ")[0:2], "-"))
+	backupFolder := fmt.Sprintf("%s/backup-%s", basePath, strings.Join(strings.Split(time.Now().Local().String(), " ")[0:2], "-"))
 	if os.MkdirAll(backupFolder, 0755) != nil {
 		return fmt.Errorf("unable to create a backup at %s", time.Now().Local().String())
 	}
@@ -222,20 +236,16 @@ func createBackup(teams []Team) error {
 			}
 
 			for _, projectFile := range project.files {
-				filePath := fmt.Sprintf("%s/%s/%s/%s", backupFolder, team.name, project.name, projectFile.name)
-				if os.MkdirAll(filePath, 0755) != nil {
-					fmt.Printf("unable to create a folder for team %s's %s file in %s project at %s\n", team.name, projectFile.name, project.name, time.Now().Local().String())
-					continue
-				}	
+				filePath := fmt.Sprintf("%s/%s/%s/%s.penpot", backupFolder, team.name, project.name, strings.ReplaceAll(projectFile.name, " ", "_"))
 
-				penpotFile, err := os.Create(fmt.Sprintf("%s/%s.penpot",filePath, strings.ReplaceAll(projectFile.name, " ", "_")))
-				if(err != nil){
+				penpotFile, err := os.Create(filePath)
+				if err != nil {
 					fmt.Printf("unable to create penpot file for team\n%s\n", err)
-				}else {
+				} else {
 					bytes, err := downloadPenpotFile(projectFile.id)
-					if(err != nil){
+					if err != nil {
 						fmt.Printf("unable to download penpot file \n%s \n", err)
-					}else {
+					} else {
 						penpotFile.Write(bytes)
 						penpotFile.Close()
 					}
